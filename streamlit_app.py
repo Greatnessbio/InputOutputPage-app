@@ -10,12 +10,12 @@ import difflib
 # Initialize session state
 if 'content' not in st.session_state:
     st.session_state.content = ""
-if 'audit_report' not in st.session_state:
-    st.session_state.audit_report = ""
-if 'keyword_data' not in st.session_state:
-    st.session_state.keyword_data = ""
-if 'competitor_analysis' not in st.session_state:
-    st.session_state.competitor_analysis = ""
+if 'organic_kw_ranks' not in st.session_state:
+    st.session_state.organic_kw_ranks = ""
+if 'semrush_site_audit' not in st.session_state:
+    st.session_state.semrush_site_audit = ""
+if 'technical_seo_audit' not in st.session_state:
+    st.session_state.technical_seo_audit = ""
 if 'seo_analysis' not in st.session_state:
     st.session_state.seo_analysis = ""
 if 'recommendations' not in st.session_state:
@@ -71,51 +71,51 @@ def get_jina_reader_content(url):
     except requests.exceptions.RequestException as e:
         return f"Failed to fetch content: {str(e)}"
 
-def analyze_seo_data(audit_report, keyword_data, competitor_analysis):
+def analyze_seo_data(organic_kw_ranks, semrush_site_audit, technical_seo_audit):
     OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
     if not OPENROUTER_API_KEY:
         st.error("OpenRouter API key not found. Please set the OPENROUTER_API_KEY environment variable.")
         return None
 
-    prompt = f"""Analyze the following SEO audit report, keyword data, and competitor analysis. Provide a detailed analysis and prioritization of keywords and opportunities.
+    prompt = f"""Analyze the following SEO data from organic keyword rankings, SEMrush site audit, and technical SEO audit. Provide a detailed analysis and prioritization of keywords and opportunities.
 
-SEO Audit Report:
-<audit_report>
-{audit_report}
-</audit_report>
+Organic Keyword Rankings:
+<organic_kw_ranks>
+{organic_kw_ranks}
+</organic_kw_ranks>
 
-Keyword Data:
-<keyword_data>
-{keyword_data}
-</keyword_data>
+SEMrush Site Audit:
+<semrush_site_audit>
+{semrush_site_audit}
+</semrush_site_audit>
 
-Competitor Analysis:
-<competitor_analysis>
-{competitor_analysis}
-</competitor_analysis>
+Technical SEO Audit:
+<technical_seo_audit>
+{technical_seo_audit}
+</technical_seo_audit>
 
 Provide your analysis in the following format:
 
 <seo_analysis>
 1. Key Issues and Opportunities:
-   - Summary of critical issues from the audit report
-   - Top keyword opportunities based on volume, difficulty, and relevance
+   - Summary of critical issues from the SEMrush and technical SEO audits
+   - Top keyword opportunities based on current rankings, volume, and difficulty
 
 2. Keyword Clustering and Prioritization:
    - Grouped keywords by theme and intent
    - Prioritized list of keywords to target
 
 3. Content Gap Analysis:
-   - Topics and themes missing from the current content
-   - Comparison with competitor content
+   - Topics and themes missing from the current content based on keyword data
+   - Suggestions for new content topics
 
 4. On-Page Optimization Priorities:
-   - Elements needing immediate attention (titles, meta descriptions, headings)
+   - Elements needing immediate attention (titles, meta descriptions, headings) based on the audit reports
    - Suggestions for content structure improvements
 
-5. Competitor Insights:
-   - Key strategies employed by top-ranking competitors
-   - Opportunities to differentiate and outperform
+5. Technical SEO Insights:
+   - Key technical issues identified
+   - Prioritized list of technical improvements
 </seo_analysis>
 """
 
@@ -186,6 +186,9 @@ Provide your recommendations in the following format:
 
 6. Additional On-Page Optimizations:
    - Other specific recommendations (e.g., image alt text, schema markup)
+
+7. Technical Improvements:
+   - List of technical SEO improvements specific to this page
 </page_recommendations>
 """
 
@@ -217,12 +220,12 @@ def main():
         st.success("Logged in successfully!")
 
         url = st.text_input('Enter URL to analyze (including http:// or https://):')
-        st.session_state.audit_report = st.text_area('Paste your SEMrush audit report here:', height=200)
-        st.session_state.keyword_data = st.text_area('Paste your keyword data here:', height=200)
-        st.session_state.competitor_analysis = st.text_area('Paste your competitor analysis here:', height=200)
+        st.session_state.organic_kw_ranks = st.text_area('Paste the content of OligoFactory_Current_Organic_KW_Ranks.txt here:', height=200)
+        st.session_state.semrush_site_audit = st.text_area('Paste the content of OligoFactory_Semrush_Site_Audit.txt here:', height=200)
+        st.session_state.technical_seo_audit = st.text_area('Paste the content of OligoFactory_TechnicalSEO_Audit.txt here:', height=200)
         
         if st.button('Analyze and Generate Recommendations'):
-            if url and st.session_state.audit_report and st.session_state.keyword_data and st.session_state.competitor_analysis:
+            if url and st.session_state.organic_kw_ranks and st.session_state.semrush_site_audit and st.session_state.technical_seo_audit:
                 with st.spinner('Fetching content...'):
                     st.session_state.content = get_jina_reader_content(url)
                 
@@ -230,7 +233,7 @@ def main():
                     st.success("Content fetched successfully!")
                     
                     with st.spinner('Analyzing SEO data...'):
-                        seo_analysis = analyze_seo_data(st.session_state.audit_report, st.session_state.keyword_data, st.session_state.competitor_analysis)
+                        seo_analysis = analyze_seo_data(st.session_state.organic_kw_ranks, st.session_state.semrush_site_audit, st.session_state.technical_seo_audit)
                     
                     if seo_analysis:
                         st.success("SEO data analyzed successfully!")
