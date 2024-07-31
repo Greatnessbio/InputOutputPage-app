@@ -1,230 +1,270 @@
 import streamlit as st
 import requests
-import pandas as pd
-import plotly.express as px
-from datetime import datetime, timedelta
 import json
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 import time
-
-# Set up page config
-st.set_page_config(page_title="TrendSift+", page_icon="🔍", layout="wide")
-
-# Load credentials from secrets
-try:
-  USERNAME = st.secrets["credentials"]["username"]
-  PASSWORD = st.secrets["credentials"]["password"]
-  SERPAPI_KEY = st.secrets["serpapi"]["api_key"]
-  SERPER_KEY = st.secrets["serper"]["api_key"]
-  EXA_API_KEY = st.secrets["exa"]["api_key"]
-except KeyError as e:
-  st.error(f"Missing secret: {e}. Please check your Streamlit secrets configuration.")
-  st.stop()
+import os
+import difflib
 
 # Initialize session state
-if 'search_results' not in st.session_state:
-  st.session_state.search_results = {}
-if 'quick_results' not in st.session_state:
-  st.session_state.quick_results = []
-if 'selected_results' not in st.session_state:
-  st.session_state.selected_results = []
-if 'processed_results' not in st.session_state:
-  st.session_state.processed_results = []
+if 'content' not in st.session_state:
+    st.session_state.content = ""
+if 'organic_kw_ranks' not in st.session_state:
+    st.session_state.organic_kw_ranks = ""
+if 'semrush_site_audit' not in st.session_state:
+    st.session_state.semrush_site_audit = ""
+if 'technical_seo_audit' not in st.session_state:
+    st.session_state.technical_seo_audit = ""
+if 'seo_analysis' not in st.session_state:
+    st.session_state.seo_analysis = ""
+if 'recommendations' not in st.session_state:
+    st.session_state.recommendations = ""
 
-# Simple rate limiting function
-def rate_limited(max_per_minute):
-  min_interval = 60.0 / max_per_minute
-  def decorator(func):
-      def wrapper(*args, **kwargs):
-          now = time.time()
-          if 'last_request_time' not in st.session_state:
-              st.session_state.last_request_time = 0
-          elapsed = now - st.session_state.last_request_time
-          left_to_wait = min_interval - elapsed
-          if left_to_wait > 0:
-              time.sleep(left_to_wait)
-          st.session_state.last_request_time = time.time()
-          return func(*args, **kwargs)
-      return wrapper
-  return decorator
+# User agent to mimic a browser
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
 
-@st.cache_data(ttl=3600)
-def google_trends_search(query, timeframe):
-  params = {
-      "engine": "google_trends",
-      "q": query,
-      "date": timeframe,
-      "api_key": SERPAPI_KEY
-  }
-  try:
-      response = requests.get("https://serpapi.com/search", params=params)
-      response.raise_for_status()
-      return response.json()
-  except requests.exceptions.RequestException as e:
-      st.error(f"Error fetching Google Trends data: {e}")
-      return None
+# Create a retry strategy
+retry_strategy = Retry(
+    total=3,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS"],
+    backoff_factor=1
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+http = requests.Session()
+http.mount("https://", adapter)
+http.mount("http://", adapter)
 
-@st.cache_data(ttl=3600)
-def serper_search(query, search_type="search"):
-  url = f"https://google.serper.dev/{search_type}"
-  payload = json.dumps({"q": query})
-  headers = {
-      'X-API-KEY': SERPER_KEY,
-      'Content-Type': 'application/json'
-  }
-  try:
-      response = requests.post(url, headers=headers, data=payload)
-      response.raise_for_status()
-      return response.json()
-  except requests.exceptions.RequestException as e:
-      st.error(f"Error fetching data from Serper: {e}")
-      return None
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    def password_entered():
+        if st.session_state["password"] == st.secrets["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
 
-@st.cache_data(ttl=3600)
-def exa_search(query, category, start_date, end_date):
-  url = "https://api.exa.ai/search"
-  headers = {
-      "accept": "application/json",
-      "content-type": "application/json",
-      "x-api-key": EXA_API_KEY
-  }
-  payload = {
-      "query": query,
-      "useAutoprompt": True,
-      "type": "neural",
-      "category": category,
-      "numResults": 10,
-      "startPublishedDate": start_date,
-      "endPublishedDate": end_date
-  }
-  try:
-      response = requests.post(url, json=payload, headers=headers)
-      response.raise_for_status()
-      return response.json()
-  except requests.exceptions.RequestException as e:
-      st.error(f"Error fetching data from Exa: {str(e)}")
-      return None
+    if "password_correct" not in st.session_state:
+        st.text_input(
+            "Password", type="password", on_change=password_entered, key="password"
+        )
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input(
+            "Password", type="password", on_change=password_entered, key="password"
+        )
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        return True
 
 def get_jina_reader_content(url):
-  jina_url = f"https://r.jina.ai/{url}"
-  headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      'Accept': 'application/json'
-  }
-  try:
-      response = requests.get(jina_url, headers=headers)
-      response.raise_for_status()
-      time.sleep(3)  # 3-second delay between requests
-      return response.json()
-  except requests.exceptions.RequestException as e:
-      return f"Failed to fetch content: {str(e)}"
+    jina_url = f"https://r.jina.ai/{url}"
+    try:
+        response = http.get(jina_url, headers=HEADERS)
+        response.raise_for_status()
+        time.sleep(3)  # 3-second delay between requests
+        return response.text
+    except requests.exceptions.RequestException as e:
+        return f"Failed to fetch content: {str(e)}"
 
-def login():
-  st.title("Login to TrendSift+")
-  with st.form("login_form"):
-      username = st.text_input("Username")
-      password = st.text_input("Password", type="password")
-      submit_button = st.form_submit_button("Login")
+def analyze_seo_data(organic_kw_ranks, semrush_site_audit, technical_seo_audit):
+    OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
+    if not OPENROUTER_API_KEY:
+        st.error("OpenRouter API key not found. Please set the OPENROUTER_API_KEY environment variable.")
+        return None
 
-      if submit_button:
-          if username == USERNAME and password == PASSWORD:
-              st.session_state["logged_in"] = True
-              st.experimental_rerun()
-          else:
-              st.error("Invalid username or password")
+    prompt = f"""Analyze the following SEO data from organic keyword rankings, SEMrush site audit, and technical SEO audit. Provide a detailed analysis and prioritization of keywords and opportunities.
+
+Organic Keyword Rankings:
+<organic_kw_ranks>
+{organic_kw_ranks}
+</organic_kw_ranks>
+
+SEMrush Site Audit:
+<semrush_site_audit>
+{semrush_site_audit}
+</semrush_site_audit>
+
+Technical SEO Audit:
+<technical_seo_audit>
+{technical_seo_audit}
+</technical_seo_audit>
+
+Provide your analysis in the following format:
+
+<seo_analysis>
+1. Key Issues and Opportunities:
+   - Summary of critical issues from the SEMrush and technical SEO audits
+   - Top keyword opportunities based on current rankings, volume, and difficulty
+
+2. Keyword Clustering and Prioritization:
+   - Grouped keywords by theme and intent
+   - Prioritized list of keywords to target
+
+3. Content Gap Analysis:
+   - Topics and themes missing from the current content based on keyword data
+   - Suggestions for new content topics
+
+4. On-Page Optimization Priorities:
+   - Elements needing immediate attention (titles, meta descriptions, headings) based on the audit reports
+   - Suggestions for content structure improvements
+
+5. Technical SEO Insights:
+   - Key technical issues identified
+   - Prioritized list of technical improvements
+</seo_analysis>
+"""
+
+    response = requests.post(
+        url="https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "anthropic/claude-3.5-sonnet",
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant that analyzes SEO data and provides strategic insights."},
+                {"role": "user", "content": prompt}
+            ]
+        }
+    )
+    
+    if response.status_code == 200:
+        return response.json()['choices'][0]['message']['content']
+    else:
+        st.error(f"Error from OpenRouter API: {response.status_code} - {response.text}")
+        return None
+
+def generate_recommendations(url, content, seo_analysis):
+    OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
+    if not OPENROUTER_API_KEY:
+        st.error("OpenRouter API key not found. Please set the OPENROUTER_API_KEY environment variable.")
+        return None
+
+    prompt = f"""Based on the following SEO analysis and the current page content, generate specific recommendations for optimizing the page at {url}.
+
+SEO Analysis:
+<seo_analysis>
+{seo_analysis}
+</seo_analysis>
+
+Current page content:
+<current_content>
+{content}
+</current_content>
+
+Provide your recommendations in the following format:
+
+<page_recommendations>
+1. Page Title:
+   - Current: [current title]
+   - Recommended: [proposed title]
+   - Explanation: [brief justification]
+
+2. Meta Description:
+   - Current: [current meta description]
+   - Recommended: [proposed meta description]
+   - Explanation: [brief justification]
+
+3. Heading Structure:
+   - Current structure
+   - Recommended structure
+   - Explanations for changes
+
+4. Content Additions/Improvements:
+   - List of suggested additions or modifications
+   - Target keywords for each suggestion
+
+5. Internal Linking:
+   - Suggested internal links to add
+   - Anchor text recommendations
+
+6. Additional On-Page Optimizations:
+   - Other specific recommendations (e.g., image alt text, schema markup)
+
+7. Technical Improvements:
+   - List of technical SEO improvements specific to this page
+</page_recommendations>
+"""
+
+    response = requests.post(
+        url="https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "anthropic/claude-3.5-sonnet",
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant that provides specific SEO recommendations for web pages."},
+                {"role": "user", "content": prompt}
+            ]
+        }
+    )
+    
+    if response.status_code == 200:
+        return response.json()['choices'][0]['message']['content']
+    else:
+        st.error(f"Error from OpenRouter API: {response.status_code} - {response.text}")
+        return None
 
 def main():
-  if "logged_in" not in st.session_state:
-      st.session_state["logged_in"] = False
+    st.title('Advanced SEO Content Optimizer')
 
-  if not st.session_state["logged_in"]:
-      login()
-  else:
-      st.title("TrendSift+: Multi-Source Research Tool")
+    if check_password():
+        st.success("Logged in successfully!")
 
-      with st.form("search_form"):
-          st.header("Search Parameters")
-          search_query = st.text_input("Enter search term")
-          
-          search_types = ["Google Trends", "Serper Search", "Serper Scholar", "Exa Company", "Exa Research Paper", "Exa News", "Exa Tweet"]
-          selected_search_types = st.multiselect("Select search types", search_types, default=["Serper Search", "Exa News"])
-          
-          timeframes = {
-              "Past 7 days": "now 7-d",
-              "Past 30 days": "today 1-m",
-              "Past 90 days": "today 3-m",
-              "Past 12 months": "today 12-m",
-              "Past 5 years": "today 5-y"
-          }
-          selected_timeframe = st.selectbox("Select time range", list(timeframes.keys()))
-
-          search_button = st.form_submit_button("Search")
-
-      if search_button and search_query:
-          st.session_state.search_results = {} 
-          st.session_state.quick_results = []
-          
-          # Perform initial search and display quick results
-          with st.spinner("Searching..."):
-              for search_type in selected_search_types:
-                  if search_type == "Google Trends":
-                      results = google_trends_search(search_query, timeframes[selected_timeframe])
-                      if results and "interest_over_time" in results:
-                          df = pd.DataFrame(results["interest_over_time"]["timeline_data"])
-                          df['date'] = pd.to_datetime(df['date'])
-                          df['value'] = df['values'].apply(lambda x: x[0]['value'])
-                          fig = px.line(df, x='date', y='value', title=f"Interest over time for '{search_query}'")
-                          st.plotly_chart(fig)
-                  elif search_type in ("Serper Search", "Serper Scholar"):
-                      results = serper_search(search_query, search_type.split()[-1].lower())
-                      if results and 'organic' in results:
-                          st.session_state.quick_results.extend([{'Source': search_type, 'Title': r['title'], 'Link': r['link']} for r in results['organic'][:5]])
-                  elif search_type.startswith("Exa"):
-                      category = search_type.split()[-1].lower()
-                      results = exa_search(search_query, category, 
-                                           (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                                           datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
-                      if results and 'results' in results:
-                          st.session_state.quick_results.extend([{'Source': search_type, 'Title': r['title'], 'Link': r['url']} for r in results['results'][:5]])
-                  
-                  st.session_state.search_results[search_type] = results
-
-      if st.session_state.quick_results:
-          st.subheader("Quick Results")
-          df = pd.DataFrame(st.session_state.quick_results)
-          df['Get Content'] = False
-          edited_df = st.data_editor(df, column_config={
-              "Get Content": st.column_config.CheckboxColumn(default=False),
-              "Source": st.column_config.TextColumn(width="medium"),
-              "Title": st.column_config.TextColumn(width="large"),
-              "Link": st.column_config.TextColumn(width="large")
-          }, hide_index=True, use_container_width=True, num_rows="dynamic")
-          st.session_state.selected_results = edited_df[edited_df['Get Content']].to_dict('records')
-
-      if st.button("Process Selected Results"):
-          # Process and scrape selected results
-          with st.spinner("Processing and summarizing selected results..."):
-              st.session_state.processed_results = []
-              for result in st.session_state.selected_results:
-                  jina_content = get_jina_reader_content(result['Link'])
-                  if isinstance(jina_content, dict):
-                      result['full_content'] = jina_content.get('text', 'No content available')
-                      result['summary'] = jina_content.get('summary', 'No summary available')
-                  else:
-                      result['full_content'] = jina_content
-                      result['summary'] = 'Error fetching summary'
-                  st.session_state.processed_results.append(result)
-
-      # Display detailed results for selected items
-      if st.session_state.processed_results:
-          st.subheader("Detailed Results for Selected Items")
-          for result in st.session_state.processed_results:
-              st.write(f"**Title:** {result['Title']}")
-              st.write(f"**Source:** {result['Source']}")
-              st.write(f"**Summary:** {result['summary']}")
-              st.write(f"**Link:** [{result['Link']}]({result['Link']})")
-              st.write("**Full Content:**")
-              st.text_area("", result['full_content'], height=300)
-              st.write("---")
+        url = st.text_input('Enter URL to analyze (including http:// or https://):')
+        st.session_state.organic_kw_ranks = st.text_area('Paste the content of OligoFactory_Current_Organic_KW_Ranks.txt here:', height=200)
+        st.session_state.semrush_site_audit = st.text_area('Paste the content of OligoFactory_Semrush_Site_Audit.txt here:', height=200)
+        st.session_state.technical_seo_audit = st.text_area('Paste the content of OligoFactory_TechnicalSEO_Audit.txt here:', height=200)
+        
+        if st.button('Analyze and Generate Recommendations'):
+            if url and st.session_state.organic_kw_ranks and st.session_state.semrush_site_audit and st.session_state.technical_seo_audit:
+                with st.spinner('Fetching content...'):
+                    st.session_state.content = get_jina_reader_content(url)
+                
+                if st.session_state.content and not st.session_state.content.startswith("Failed to fetch content"):
+                    st.success("Content fetched successfully!")
+                    
+                    with st.spinner('Analyzing SEO data...'):
+                        seo_analysis = analyze_seo_data(st.session_state.organic_kw_ranks, st.session_state.semrush_site_audit, st.session_state.technical_seo_audit)
+                    
+                    if seo_analysis:
+                        st.success("SEO data analyzed successfully!")
+                        st.session_state.seo_analysis = seo_analysis
+                        
+                        with st.spinner('Generating recommendations...'):
+                            recommendations = generate_recommendations(url, st.session_state.content, seo_analysis)
+                        
+                        if recommendations:
+                            st.success("Recommendations generated successfully!")
+                            st.session_state.recommendations = recommendations
+                        else:
+                            st.error("Failed to generate recommendations.")
+                    else:
+                        st.error("Failed to analyze SEO data.")
+                else:
+                    st.error(st.session_state.content)
+            else:
+                st.warning('Please enter a URL and paste all required data')
+        
+        if st.session_state.content:
+            st.subheader("Current Page Content:")
+            st.text_area("Full content", st.session_state.content, height=200)
+        
+        if 'seo_analysis' in st.session_state and st.session_state.seo_analysis:
+            st.subheader("SEO Analysis:")
+            st.text_area("Analysis and insights", st.session_state.seo_analysis, height=300)
+        
+        if 'recommendations' in st.session_state and st.session_state.recommendations:
+            st.subheader("Page Optimization Recommendations:")
+            st.text_area("Specific recommendations", st.session_state.recommendations, height=400)
 
 if __name__ == "__main__":
-  main()
+    main()
